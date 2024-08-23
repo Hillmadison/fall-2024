@@ -1,9 +1,6 @@
 # ECON 6343: Econometrics III - Problem Set 1
 # Madison Hill
 
-# using Pkg
-# Pkg.add(["JLD2", "Random", "LinearAlgebra", "Statistics", "CSV", "DataFrames", "FreqTables", "Distributions"])
-
 using JLD2, Random, LinearAlgebra, Statistics, CSV, DataFrames, FreqTables, Distributions
 
 # Question 1: Initializing variables and practice with basic matrix operations
