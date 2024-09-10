@@ -1,0 +1,189 @@
+# Problem set 2
+# Madison Hill 
+using Pkg
+
+Pkg.add("Optim")
+Pkg.add("HTTP")
+Pkg.add("GLM")
+
+Pkg.add("LinearAlgebra")
+Pkg.add("Random")
+Pkg.add("Statistics")
+Pkg.add("DataFrames")
+Pkg.add("CSV")
+Pkg.add("FreqTables")
+
+using Optim
+using HTTP
+using GLM
+using LinearAlgebra
+using Random
+using Statistics
+using DataFrames
+using CSV
+using FreqTables
+
+#:::::::::::::::::::::::::::::::::::::::::::::::::::
+# question 1
+#:::::::::::::::::::::::::::::::::::::::::::::::::::
+using Optim
+f(x) = -x[1]^4-10x[1]^3-2x[1]^2-3x[1]-2
+minusf(x) = x[1]^4+10x[1]^3+2x[1]^2+3x[1]+2
+startval = rand(1)   # random starting value
+result = optimize(minusf, startval, BFGS())
+println("argmin (minimizer) is ",Optim.minimizer(result)[1])
+println("min is ",Optim.minimum(result))
+
+
+#:::::::::::::::::::::::::::::::::::::::::::::::::::
+# question 2
+#:::::::::::::::::::::::::::::::::::::::::::::::::::
+using DataFrames
+using CSV
+using HTTP
+url = "https://raw.githubusercontent.com/OU-PhD-Econometrics/fall-2022/master/ProblemSets/PS1-julia-intro/nlsw88.csv"
+df = CSV.read(HTTP.get(url).body, DataFrame)
+X = [ones(size(df,1),1) df.age df.race.==1 df.collgrad.==1]
+y = df.married.==1
+
+function ols(beta, X, y)
+    ssr = (y.-X*beta)'*(y.-X*beta)
+    return ssr
+end
+
+beta_hat_ols = optimize(b -> ols(b, X, y), rand(size(X,2)), LBFGS(), Optim.Options(g_tol=1e-6, iterations=100_000, show_trace=true))
+println(beta_hat_ols.minimizer)
+
+using GLM
+bols = inv(X'*X)*X'*y
+df.white = df.race.==1
+bols_lm = lm(@formula(married ~ age + white + collgrad), df)
+
+#:::::::::::::::::::::::::::::::::::::::::::::::::::
+# question 3
+#:::::::::::::::::::::::::::::::::::::::::::::::::::
+function logit(alpha, X, d)
+    z = X * alpha
+    p = @. 1 / (1 + exp(-z))  # Using broadcast for element-wise operation
+    loglike = sum(@. d * log(p + 1e-10) + (1 - d) * log(1 - p + 1e-10))
+    return -loglike
+end
+
+# Set up starting values and run optimization
+alpha_start = zeros(size(X, 2))
+alpha_hat_logit = optimize(a -> logit(a, X, y), alpha_start, LBFGS(), 
+                           Optim.Options(g_tol=1e-6, iterations=100_000, show_trace=false))
+
+# Print results
+println("Logit coefficients: ", Optim.minimizer(alpha_hat_logit))
+println("Log-likelihood at minimum: ", -Optim.minimum(alpha_hat_logit))
+
+#:::::::::::::::::::::::::::::::::::::::::::::::::::
+# question 4
+#:::::::::::::::::::::::::::::::::::::::::::::::::::
+logit_glm = glm(@formula(married ~ age + white + collgrad), df, Binomial(), LogitLink())
+println("GLM coefficients: ", coef(logit_glm))
+
+
+#:::::::::::::::::::::::::::::::::::::::::::::::::::
+# question 5
+#:::::::::::::::::::::::::::::::::::::::::::::::::::
+using FreqTables
+
+freqtable(df, :occupation) # note small number of obs in some occupations
+df = dropmissing(df, :occupation)
+df[df.occupation.==10,:occupation] .= 9
+df[df.occupation.==11,:occupation] .= 9
+df[df.occupation.==12,:occupation] .= 9
+df[df.occupation.==13,:occupation] .= 9
+freqtable(df, :occupation) # problem solved
+
+X = [ones(size(df,1),1) df.age df.race.==1 df.collgrad.==1]
+y = df.occupation
+
+function mlogit(alpha, X, y)
+    n, k = size(X)
+    J = length(unique(y))
+    alpha_mat = reshape(alpha, k, J-1)
+    
+    loglike = 0.0
+    Threads.@threads for i in 1:n
+        exp_vals = exp.(X[i,:]' * alpha_mat)
+        denom = 1 + sum(exp_vals)
+        p = y[i] == J ? 1 / denom : exp_vals[y[i]] / denom
+        loglike += log(p + 1e-10)
+    end
+    
+    return -loglike
+end
+
+# Estimate the model
+alpha_start = zeros(size(X,2) * (length(unique(y))-1))
+alpha_hat_mlogit = optimize(a -> mlogit(a, X, y), alpha_start, LBFGS(), 
+                            Optim.Options(g_tol=1e-5, iterations=100_000, show_trace=true))
+println("Multinomial Logit coefficients: ", Optim.minimizer(alpha_hat_mlogit))
+
+#:::::::::::::::::::::::::::::::::::::::::::::::::::
+# question 6
+#:::::::::::::::::::::::::::::::::::::::::::::::::::
+function run_models(url)
+    # Data preparation
+    df = CSV.read(HTTP.get(url).body, DataFrame)
+    df = dropmissing(df, :occupation)
+    df[df.occupation.==10,:occupation] .= 9
+    df[df.occupation.==11,:occupation] .= 9
+    df[df.occupation.==12,:occupation] .= 9
+    df[df.occupation.==13,:occupation] .= 9
+    df.white = df.race.==1
+    
+    X = [ones(size(df,1),1) df.age df.white df.collgrad.==1]
+    y_married = df.married.==1
+    y_occupation = df.occupation
+
+    # OLS
+    beta_hat_ols = optimize(b -> ols(b, X, y_married), zeros(size(X,2)), LBFGS(), 
+                            Optim.Options(g_tol=1e-6, iterations=100_000))
+    println("OLS coefficients: ", Optim.minimizer(beta_hat_ols))
+
+    # Logit
+    alpha_hat_logit = optimize(a -> logit(a, X, y_married), zeros(size(X,2)), LBFGS(), 
+                               Optim.Options(g_tol=1e-6, iterations=100_000))
+    println("Logit coefficients: ", Optim.minimizer(alpha_hat_logit))
+
+    # GLM Logit
+    logit_glm = glm(@formula(married ~ age + white + collgrad), df, Binomial(), LogitLink())
+    println("GLM Logit coefficients: ", coef(logit_glm))
+
+    # Multinomial Logit
+    alpha_start = zeros(size(X,2) * (length(unique(y_occupation))-1))
+    alpha_hat_mlogit = optimize(a -> mlogit(a, X, y_occupation), alpha_start, LBFGS(), 
+                                Optim.Options(g_tol=1e-5, iterations=100_000))
+    println("Multinomial Logit coefficients: ", Optim.minimizer(alpha_hat_mlogit))
+end
+
+# Run all models
+@time run_models(url)
+
+
+
+
+###############################################################
+# Question 7
+###############################################################
+
+using Test
+
+@testset "Logit Function Tests" begin
+    X_test = [1.0 2.0; 1.0 3.0; 1.0 4.0]
+    y_test = [0, 1, 1]
+    alpha_test = [0.5, -0.2]
+    
+    @test logit(alpha_test, X_test, y_test) ≈ -2.1972245773362196 atol=1e-6
+    
+    # Test with all zeros
+    @test logit(zeros(2), X_test, y_test) ≈ -2.1972245773362196 atol=1e-6
+    
+    # Test with extreme values
+    @test logit([100.0, 100.0], X_test, y_test) ≈ 0 atol=1e-6
+    @test logit([-100.0, -100.0], X_test, y_test) ≈ -Inf atol=1e-6
+end
